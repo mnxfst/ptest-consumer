@@ -20,8 +20,7 @@ package com.mnxfst.testing.consumer.handler;
 
 import java.util.List;
 import java.util.Map;
-
-import org.jboss.netty.channel.MessageEvent;
+import java.util.Properties;
 
 import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
 
@@ -30,15 +29,19 @@ import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
  * @author ckreutzfeldt
  * @since 22.02.2012
  */
-public interface IHttpRequestHandler {
+public interface IHttpRequestHandler extends Runnable {
 
 	/**
-	 * Processes an incoming http request according to consumer specific requirements
-	 * @param messageEvent
-	 * @param queryParameters
+	 * Initializes hte handler using the provided properties set
+	 * @param configuration
+	 */
+	public void initialize(Properties configuration, Map<String, List<String>> queryParameters) throws HttpRequestProcessingException;
+	
+	/**
+	 * Shutsdown the http request handler
 	 * @throws HttpRequestProcessingException
 	 */
-	public void handleRequest(MessageEvent messageEvent, Map<String, List<String>> queryParameters) throws HttpRequestProcessingException;
+	public void shutdown() throws HttpRequestProcessingException;
 	
 	/**
 	 * Returns the current handler statistics
@@ -53,8 +56,16 @@ public interface IHttpRequestHandler {
 	public String getId();
 	
 	/**
+	 * Sets the consumer identifier
+	 * @param id
+	 */
+	public void setId(String id);
+	
+	/**
 	 * Returns a short name describing the handler
 	 * @return
 	 */
-	public String getName();
+	public String getType();
+	
+	public void setType(String type);
 }

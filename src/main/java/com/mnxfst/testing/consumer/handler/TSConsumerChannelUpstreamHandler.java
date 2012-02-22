@@ -21,11 +21,14 @@ package com.mnxfst.testing.consumer.handler;
 
 import java.io.ByteArrayOutputStream;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -41,13 +44,20 @@ import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 
 import org.apache.log4j.Logger;
+import org.jboss.netty.buffer.ChannelBuffers;
+import org.jboss.netty.channel.ChannelFuture;
+import org.jboss.netty.channel.ChannelFutureListener;
 import org.jboss.netty.channel.ChannelHandlerContext;
 import org.jboss.netty.channel.ExceptionEvent;
 import org.jboss.netty.channel.MessageEvent;
 import org.jboss.netty.channel.SimpleChannelUpstreamHandler;
+import org.jboss.netty.handler.codec.http.DefaultHttpResponse;
 import org.jboss.netty.handler.codec.http.HttpHeaders;
 import org.jboss.netty.handler.codec.http.HttpMethod;
 import org.jboss.netty.handler.codec.http.HttpRequest;
+import org.jboss.netty.handler.codec.http.HttpResponse;
+import org.jboss.netty.handler.codec.http.HttpResponseStatus;
+import org.jboss.netty.handler.codec.http.HttpVersion;
 import org.jboss.netty.handler.codec.http.QueryStringDecoder;
 import org.jboss.netty.util.CharsetUtil;
 import org.w3c.dom.Document;
@@ -66,23 +76,30 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	
 	private static final Logger logger = Logger.getLogger(TSConsumerChannelUpstreamHandler.class);
 	
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	// available request parameters required for starting/stopping/collecting stats from consumer 
 	private static final String REQUEST_PARAM_OP_CODE_START_CONSUMER = "startConsumer";
 	private static final String REQUEST_PARAM_OP_CODE_STOP_CONSUMER = "stopConsumer";
 	private static final String REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS = "collectConsumerStats";
 	private static final String REQUEST_PARAM_CONSUMER_ID = "consumerId";
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	// general response codes
-	private static final int RESPONSE_CODE_CONSUMER_STARTED = 1;
-	private static final int RESPONSE_CODE_CONSUMER_STOPPED = 2;
-	private static final int RESPONSE_CODE_CONSUMER_STATS_COLLECTED = 3;
-	private static final int RESPONSE_CODE_ERROR = 4;
 	
 	private static final int ERROR_CODE_NO_CONSUMER_TYPES_FOUND = 1;
 	private static final int ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND = 2;
 	private static final int ERROR_CODE_COLLECTING_STATS_FAILED = 3;
 	private static final int ERROR_CODE_CONSUMER_START_FAILED = 4;
-	
+	private static final int ERROR_CODE_CONSUMER_STOP_FAILED = 5;
+	private static final int ERROR_CODE_UNKNOWN_OP_CODE = 6;
+
+	private static final int CONSUMER_SHUTDOWN_STATE_SUCCESS = 1;
+	private static final int CONSUMER_SHUTDOWN_STATE_UNKNOWN_ID = 2;
+	private static final int CONSUMER_SHUTDOWN_STATE_FAILED = 3;
+	/////////////////////////////////////////////////////////////////////////////////////////////
+
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	// response xml tags
 	private static final String CONSUMER_RESPONSE_ROOT_ELEMENT = "tsConsumerResponse"; 
 	private static final String CONSUMER_RESPONSE_STATS_ROOT_ELEMENT = "statistics";
@@ -91,7 +108,17 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	private static final String CONSUMER_RESPONSE_ERROR_ELEMENT = "error";
 	private static final String CONSUMER_RESPONSE_ERROR_ID_ELEMENT = "id";
 	private static final String CONSUMER_RESPONSE_ERROR_MSG_ELEMENT = "msg";	
-	
+	private static final String CONSUMER_RESPONSE_SHUTDOWN_ROOT_ELEMENT = "shutdownConsumers";
+	private static final String CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_ELEMENT = "consumer";
+	private static final String CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_ID_ELEMENT = "id";
+	private static final String CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_STATE_ELEMENT = "state";
+	private static final String CONSUMER_RESPONSE_START_ROOT_ELEMENT = "startConsumers";
+	private static final String CONSUMER_RESPONSE_START_CONSUMER_ELEMENT = "consumer";
+	private static final String CONSUMER_RESPONSE_START_CONSUMER_ID_ELEMENT = "id";
+	private static final String CONSUMER_RESPONSE_START_CONSUMER_TYPE_ELEMENT = "type";
+	/////////////////////////////////////////////////////////////////////////////////////////////
+
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	// holds all configured request handlers and provides thread-safe access to them
 	private static ConcurrentMap<String, IHttpRequestHandler> runningConsumers = new ConcurrentHashMap<String, IHttpRequestHandler>();	
 	private static ConcurrentMap<String, Class<? extends IHttpRequestHandler>> availableConsumers = new ConcurrentHashMap<String, Class<? extends IHttpRequestHandler>>();
@@ -103,6 +130,9 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	
 	private DocumentBuilder documentBuilder = null;
 	private Transformer documentTransformer = null;
+	
+	private static ExecutorService consumerExecutorService = Executors.newCachedThreadPool(); // TODO tweak here for performance
+	/////////////////////////////////////////////////////////////////////////////////////////////
 	
 	/**
 	 * Initializes the http request handler
@@ -135,9 +165,18 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 			throw new RuntimeException("Failed to initialize document transformer. Error: " + e.getMessage(), e);
 		}
 		
-		for(String consumerType : consumers.keySet()) {
+		StringBuffer consumerStr = new StringBuffer();		
+		for(Iterator<String> iter = consumers.keySet().iterator(); iter.hasNext();) {
+			String consumerType = iter.next();
 			availableConsumers.putIfAbsent(consumerType, consumers.get(consumerType));
+			consumerStr.append(consumers.get(consumerType).getName());
+			if(iter.hasNext())
+				consumerStr.append(", ");
 		}
+		
+		
+		
+		logger.info("consumer[host="+hostname+", port="+port+", socketThreadPoolSize="+socketThreadPoolSize+", consumers="+consumerStr.toString()+"]");
 	}
 
 	/**
@@ -166,31 +205,63 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 		
 		if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_START_CONSUMER)) {
 			
+			if(logger.isDebugEnabled())
+				logger.debug("Incoming request for starting a consumer");
+			
+			// extract the types to fire up consumer for
 			String[] consumerTypes = null;
 			try {
 				consumerTypes = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_START_CONSUMER, queryParams);
 			}  catch(HttpRequestProcessingException e) {
 				errors.put(ERROR_CODE_NO_CONSUMER_TYPES_FOUND, "No consumer types provided");
 			}
+			
+			// validate the set of consumer types and instantiate the referenced ones
 			if(consumerTypes != null && consumerTypes.length > 0) {
 				try {
-					Element startConsumerElement = startConsumer(consumerTypes, responseDocument);
+					Element startConsumerElement = startConsumer(consumerTypes, responseDocument, queryParams);
 					responseRootElement.appendChild(startConsumerElement);
+					
+					logger.info(consumerTypes.length + " consumer(s) successfully started");
 				} catch(HttpRequestProcessingException e) {
 					errors.put(ERROR_CODE_CONSUMER_START_FAILED, e.getMessage()); 
 				}
 			}
-			
+
 		} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_STOP_CONSUMER)) {
 			
+			if(logger.isDebugEnabled())
+				logger.debug("Incoming request for shutting down a consumer");
+			
+			// extract the identifier of those consumers to shutdown
+			String[] consumerIds = null;
+			try {
+				consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_STOP_CONSUMER, queryParams);
+			} catch(HttpRequestProcessingException e) {
+				errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
+			}
+			
+			// validate consumer identifier array and collect statistical information from the associated instances
+			if(consumerIds != null && consumerIds.length > 0) {
+				try {
+					Element stopConsumerElement = shutdownConsumer(consumerIds, responseDocument);
+					responseRootElement.appendChild(stopConsumerElement);
+				} catch(HttpRequestProcessingException e) {
+					errors.put(ERROR_CODE_CONSUMER_STOP_FAILED, e.getMessage());
+				}
+			}
+
 		} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS)) {
 
+			// extract the identifier of those consumers to collect statistical information form
 			String[] consumerIds = null;
 			try {
 				consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS, queryParams);
 			} catch(HttpRequestProcessingException e) {
 				errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
 			}
+			
+			// validate consumer identifier array and collect statistical information from the associated instances
 			if(consumerIds != null && consumerIds.length > 0) {
 				try {
 					Element statsResponseElement = collectHandlerStatistics(consumerIds, responseDocument);
@@ -201,8 +272,10 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 			}
 		} else {
 			// report error
+			errors.put(ERROR_CODE_UNKNOWN_OP_CODE, "No valid op-code provided");
 		}
 
+		// add error response
 		if(errors != null && !errors.isEmpty()) {
 			Element errorsElement = createErrorElement(errors, responseDocument);
 			responseRootElement.appendChild(errorsElement);
@@ -211,6 +284,7 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 		
 		responseDocument.appendChild(responseRootElement);
 		
+		sendResponse(convertDocument(responseDocument), keepAlive, event);
 	}
 	
 	/**
@@ -220,13 +294,102 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	 * @return
 	 * @throws HttpRequestProcessingException
 	 */
-	protected Element startConsumer(String[] consumerTypes, Document responseDocument) throws HttpRequestProcessingException {
+	protected Element startConsumer(String[] consumerTypes, Document responseDocument, Map<String, List<String>> queryParams) throws HttpRequestProcessingException {
 		
-		for(int i = 0; i < consumerTypes.length; i++) {
+		// create response root element
+		Element startConsumersRootElement = responseDocument.createElement(CONSUMER_RESPONSE_START_ROOT_ELEMENT);
+		
+		for(int i = 0; i < consumerTypes.length; i++) {			
 			
+			Class<? extends IHttpRequestHandler> consumerHandler = availableConsumers.get(consumerTypes[i]);
+			if(consumerHandler != null) {
+				
+				IHttpRequestHandler ch = null;
+				try {
+					ch = (IHttpRequestHandler)consumerHandler.newInstance();
+				} catch (InstantiationException e) {
+					throw new HttpRequestProcessingException("Failed to instantiate consumer of type '"+consumerTypes[i]+"'");
+				} catch (IllegalAccessException e) {
+					throw new HttpRequestProcessingException("Failed to instantiate consumer of type '"+consumerTypes[i]+"'");					
+				}
+					
+				ch.setType(consumerTypes[i]);
+				ch.setId(new com.eaio.uuid.UUID().toString());
+				ch.initialize(additionalProperties, queryParams);
+				runningConsumers.putIfAbsent(ch.getId(), ch);
+				consumerExecutorService.execute(ch);
+				
+				Element startConsumerElement = responseDocument.createElement(CONSUMER_RESPONSE_START_CONSUMER_ELEMENT);
+				
+				Element consumerIdElement = responseDocument.createElement(CONSUMER_RESPONSE_START_CONSUMER_ID_ELEMENT);
+				Text consumerIdText = responseDocument.createTextNode(ch.getId());
+				consumerIdElement.appendChild(consumerIdText);
+				
+				Element consumerTypeElement = responseDocument.createElement(CONSUMER_RESPONSE_START_CONSUMER_TYPE_ELEMENT);
+				Text consumerTypeText = responseDocument.createTextNode(ch.getType());
+				consumerTypeElement.appendChild(consumerTypeText);
+				
+				startConsumerElement.appendChild(consumerIdElement);
+				startConsumerElement.appendChild(consumerTypeElement);
+				
+				startConsumersRootElement.appendChild(startConsumerElement);
+			} else {
+				throw new HttpRequestProcessingException("No consumer class found for type '"+consumerTypes[i]+"'");
+			}
+ 			
 		}
 		
-		return null;
+		return startConsumersRootElement;
+		
+	}
+	
+	/**
+	 * Shuts down the referenced consumers
+	 * @param consumerIds
+	 * @param responseDocument
+	 * @return
+	 * @throws HttpRequestProcessingException
+	 */
+	protected Element shutdownConsumer(String[] consumerIds, Document responseDocument) throws HttpRequestProcessingException {
+		
+		// create shutdown response root element
+		Element shutdownRootElement = responseDocument.createElement(CONSUMER_RESPONSE_SHUTDOWN_ROOT_ELEMENT);
+		
+		for(int i = 0; i < consumerIds.length; i++) {
+			
+			IHttpRequestHandler requestHandler = runningConsumers.get(consumerIds[i]);
+			
+			// create response elements
+			Element shutdownElement = responseDocument.createElement(CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_ELEMENT);
+			Element consumerIdElement = responseDocument.createElement(CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_ID_ELEMENT);
+			Element stateElement = responseDocument.createElement(CONSUMER_RESPONSE_SHUTDOWN_CONSUMER_STATE_ELEMENT);
+			
+			// add consumer id to consumer id element
+			Text consumerIdText = responseDocument.createTextNode(consumerIds[i]);
+			consumerIdElement.appendChild(consumerIdText);
+			
+			Text stateText = null;
+			if(requestHandler != null) {
+				try {
+					requestHandler.shutdown();
+					stateText = responseDocument.createTextNode(String.valueOf(CONSUMER_SHUTDOWN_STATE_SUCCESS));
+				} catch(HttpRequestProcessingException e) {
+					stateText = responseDocument.createTextNode(String.valueOf(CONSUMER_SHUTDOWN_STATE_FAILED));
+				}
+			} else {
+				stateText = responseDocument.createTextNode(String.valueOf(CONSUMER_SHUTDOWN_STATE_UNKNOWN_ID));
+			}
+			// add state text
+			stateElement.appendChild(stateText);
+			
+			// append consumer id and state to shutdown element
+			shutdownElement.appendChild(consumerIdElement);
+			shutdownElement.appendChild(stateElement);
+			
+			shutdownRootElement.appendChild(shutdownElement);
+		}
+		
+		return shutdownRootElement;
 		
 	}
 	
@@ -253,7 +416,8 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 			
 			Element consumerStatElement = responseDocument.createElement(CONSUMER_RESPONSE_SINGLE_CONSUMER_STAT_ELEMENT);
 			consumerStatElement.setAttribute("consumerId" , consumerIds[i]);
-			consumerStatElement.setAttribute("name", consumer.getName());
+			consumerStatElement.setAttribute("id", consumer.getId());
+			consumerStatElement.setAttribute("type", consumer.getType());
 			
 			HttpRequestHandlerStatistics stats = consumer.getHandlerStatistics();
 			if(stats != null) {
@@ -280,8 +444,10 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 		List<String> values = queryParams.get(parameter);
 		if(values != null && !values.isEmpty()) {
 			String[] result = new String[values.size()];
-			for(int i = 0; i < values.size(); i++)
-				result[i] = values.get(i);
+			for(int i = 0; i < values.size(); i++) {
+				String v = values.get(i);				
+				result[i] = (v != null ? v.trim() : "");
+			}
 			return result;
 		}
 		
@@ -360,5 +526,25 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	}
 	
 	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	/**
+	 * Sends a response containing the given message to the calling client
+	 * @param responseMessage
+	 * @param keepAlive
+	 * @param event
+	 */
+	protected void sendResponse(byte[] responseMessage, boolean keepAlive, MessageEvent event) {
+		HttpResponse httpResponse = new DefaultHttpResponse(HttpVersion.HTTP_1_1, HttpResponseStatus.OK);
+		
+		httpResponse.setContent(ChannelBuffers.copiedBuffer(responseMessage));
+		httpResponse.setHeader(HttpHeaders.Names.CONTENT_TYPE, "text/plain; charset=UTF-8");
+		
+		if(keepAlive)
+			httpResponse.setHeader(HttpHeaders.Names.CONTENT_LENGTH, httpResponse.getContent().readableBytes());
+		
+		ChannelFuture future = event.getChannel().write(httpResponse);
+		if(!keepAlive)
+			future.addListener(ChannelFutureListener.CLOSE);
+	}
 	
 }

@@ -18,26 +18,18 @@
  */
 package com.mnxfst.testing.consumer.handler;
 
-import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.parsers.ParserConfigurationException;
-import javax.xml.transform.Result;
-import javax.xml.transform.Source;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.TransformerConfigurationException;
-import javax.xml.transform.TransformerException;
-import javax.xml.transform.TransformerFactory;
-import javax.xml.transform.TransformerFactoryConfigurationError;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
 
 import junit.framework.Assert;
 
+import org.jboss.netty.channel.MessageEvent;
 import org.junit.Test;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
@@ -51,10 +43,81 @@ import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
  */
 public class TestTSConsumerChannelUpstreamHandler {
 
+	public class TestDummyRequestHandler implements IHttpRequestHandler {
+
+		public void handleRequest(MessageEvent messageEvent,
+				Map<String, List<String>> queryParameters)
+				throws HttpRequestProcessingException {
+			// TODO Auto-generated method stub
+			
+		}
+
+		/* (non-Javadoc)
+		 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#initialize(java.util.Properties)
+		 */
+		public void initialize(Properties configuration) {
+			// TODO Auto-generated method stub
+			
+		}
+
+		public void shutdown() throws HttpRequestProcessingException {
+			// TODO Auto-generated method stub
+			
+		}
+
+		public HttpRequestHandlerStatistics getHandlerStatistics() {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		public String getId() {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		/* (non-Javadoc)
+		 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#setId(java.lang.String)
+		 */
+		public void setId(String id) {
+			// TODO Auto-generated method stub
+			
+		}
+
+		/* (non-Javadoc)
+		 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#getType()
+		 */
+		public String getType() {
+			// TODO Auto-generated method stub
+			return null;
+		}
+
+		/* (non-Javadoc)
+		 * @see com.mnxfst.testing.consumer.handler.IHttpRequestHandler#setType(java.lang.String)
+		 */
+		public void setType(String type) {
+			// TODO Auto-generated method stub
+			
+		}
+
+		public void run() {
+			// TODO Auto-generated method stub
+			
+		}
+
+		public void initialize(Properties configuration,
+				Map<String, List<String>> queryParameters)
+				throws HttpRequestProcessingException {
+			// TODO Auto-generated method stub
+			
+		}		
+	}
+	
 	@Test
 	public void testExtractMultiParameterValues() throws HttpRequestProcessingException {
 		
-		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null);
+		Map<String, Class<? extends IHttpRequestHandler>> handlers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
+		handlers.put("test1", TestDummyRequestHandler.class);
+		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null, handlers);
 		try {
 			handler.extractMultiParameterValues(null, null);
 			Assert.fail("Invalid parameter values");
@@ -105,7 +168,9 @@ public class TestTSConsumerChannelUpstreamHandler {
 	
 	@Test
 	public void testCollectHandlerStatistics() throws Exception {
-		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null);
+		Map<String, Class<? extends IHttpRequestHandler>> handlers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
+		handlers.put("test1", TestDummyRequestHandler.class);
+		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null, handlers);
 
 		Document document = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
 		Element rootNode = document.createElement("junit-test");
@@ -120,7 +185,9 @@ public class TestTSConsumerChannelUpstreamHandler {
 
 	@Test
 	public void testCreateErrorElement() throws HttpRequestProcessingException, ParserConfigurationException  {
-		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null);
+		Map<String, Class<? extends IHttpRequestHandler>> handlers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
+		handlers.put("test1", TestDummyRequestHandler.class);
+		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null, handlers);
 
 		Document document = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
 		Element rootNode = document.createElement("junit-test");
@@ -143,6 +210,35 @@ public class TestTSConsumerChannelUpstreamHandler {
 		document.appendChild(rootNode);
 		
 		System.out.println(new String(handler.convertDocument(document)));		
+	}
+	
+	@Test
+	public void testShutdownConsumer() throws HttpRequestProcessingException, ParserConfigurationException {
+		
+		Map<String, Class<? extends IHttpRequestHandler>> handlers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
+		handlers.put("test1", TestDummyRequestHandler.class);
+		TSConsumerChannelUpstreamHandler handler = new TSConsumerChannelUpstreamHandler(null, 0, 0, null, handlers);
+		Document document = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+		Element rootNode = document.createElement("junit-test");
+		
+		Map<Integer, String> mapping = new HashMap<Integer, String>();
+		
+		Element element = handler.shutdownConsumer(new String[]{"consumer1", "consumer2"}, document);
+		rootNode.appendChild(element);
+		document.appendChild(rootNode);
+		
+		System.out.println(new String(handler.convertDocument(document)));
+		
+		mapping.put(Integer.valueOf(1), "error-1");
+		mapping.put(Integer.valueOf(2), "error-2");
+		
+		document = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+		rootNode = document.createElement("junit-test");
+		element = handler.shutdownConsumer(new String[]{"consumer1", "consumer2"}, document);
+		rootNode.appendChild(element);
+		document.appendChild(rootNode);
+		
+		System.out.println("SHUTDOWN: " + new String(handler.convertDocument(document)));		
 	}
 	
 }

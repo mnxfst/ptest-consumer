@@ -25,10 +25,13 @@ import java.io.IOException;
 import java.io.Serializable;
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.Executors;
+
+import javax.management.RuntimeErrorException;
 
 import org.apache.log4j.Logger;
 import org.jboss.netty.bootstrap.ServerBootstrap;
@@ -37,6 +40,7 @@ import org.jboss.netty.channel.socket.nio.NioServerSocketChannelFactory;
 
 import com.mnxfst.testing.consumer.cmd.CommandLineOption;
 import com.mnxfst.testing.consumer.cmd.CommandLineProcessor;
+import com.mnxfst.testing.consumer.handler.IHttpRequestHandler;
 
 /**
  * Provides a single entry point to the ptest consumer 
@@ -61,6 +65,8 @@ public class TSConsumerMain {
 	private static final String CLI_VALUE_MAP_HOSTNAME_KEY = "hostname";
 	private static final String CLI_VALUE_MAP_CONFIG_FILENAME_KEY = "cfgFileName";
 	
+	private static final String CFG_PROPERTY_CONSUMER_TYPES_PREFIX = "consumer.type.";
+	
 	/**
 	 * Starts up the consumer
 	 * @param args
@@ -82,11 +88,38 @@ public class TSConsumerMain {
 			Long port = (Long)commandLineValues.get(CLI_VALUE_MAP_PORT_KEY);
 			Long threadPoolSize = (Long)commandLineValues.get(CLI_VALUE_MAP_THREAD_POOL_SIZE_KEY);
 			String hostname = (String)commandLineValues.get(CLI_VALUE_MAP_HOSTNAME_KEY);
-			
 			String additionalConfigFile = (String)commandLineValues.get(CLI_VALUE_MAP_CONFIG_FILENAME_KEY);
 			Properties additionalProps = null;
-			if(additionalConfigFile != null && !additionalConfigFile.isEmpty())
-				additionalProps = loadAdditionalConfigProperties(additionalConfigFile);			
+			try {
+				additionalProps = loadAdditionalConfigProperties(additionalConfigFile);
+			} catch(IOException e) {
+				System.out.println("Failed to read config file '"+additionalConfigFile+"'. Error: " + e.getMessage());
+				System.exit(-1);
+			}
+			
+			Map<String, Class<? extends IHttpRequestHandler>> availableConsumers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
+			
+			for(Object k : additionalProps.keySet()) {
+				String key = (String)k;
+				if(key.startsWith(CFG_PROPERTY_CONSUMER_TYPES_PREFIX)) {
+					
+					String value = (String)additionalProps.get(key);
+					try {
+						@SuppressWarnings("unchecked")
+						Class<? extends IHttpRequestHandler> consumerClazz = (Class<? extends IHttpRequestHandler>) Class.forName(value);
+						availableConsumers.put(key.substring(CFG_PROPERTY_CONSUMER_TYPES_PREFIX.length()), consumerClazz);
+					} catch(ClassNotFoundException e) {
+						System.out.println("Unknown consumer class '"+value+"'");
+						System.exit(-1);						
+					}				
+				}				
+			}
+			
+			if(availableConsumers.isEmpty()) {
+				System.out.println("No consumer classes found");
+				System.exit(-1);
+			}
+			
 			
 			ChannelFactory channelFactory = null;
 			if(threadPoolSize != null && threadPoolSize.longValue() > 0)
@@ -95,7 +128,7 @@ public class TSConsumerMain {
 				channelFactory = new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool());
 			
 			ServerBootstrap serverBootstrap = new ServerBootstrap(channelFactory);
-			serverBootstrap.setPipelineFactory(new JMSConsumerPipelineFactory(hostname, measuringPoint));
+			serverBootstrap.setPipelineFactory(new TSConsumerPipelineFactory(hostname, port.intValue(), (threadPoolSize != null ? threadPoolSize.intValue() : -1), additionalProps, availableConsumers));
 			serverBootstrap.setOption("child.tcpNoDelay", true);
 			serverBootstrap.setOption("child.keepAlive", true);			
 			serverBootstrap.bind(new InetSocketAddress(port.intValue()));
@@ -129,7 +162,7 @@ public class TSConsumerMain {
 		options.add(new CommandLineOption(CMD_OPT_PORT, CMD_OPT_PORT_SHORT, true, true, Long.class, "Communication port for http server", CLI_VALUE_MAP_PORT_KEY, "Missing value for required option '"+CMD_OPT_PORT+"' ("+CMD_OPT_PORT_SHORT+")"));
 		options.add(new CommandLineOption(CMD_OPT_THREAD_POOL_SIZE, CMD_OPT_THREAD_POOL_SIZE_SHORT, false, true, Long.class, "Sized used for setting up the server socket thread pool (optional)", CLI_VALUE_MAP_THREAD_POOL_SIZE_KEY, null));
 		options.add(new CommandLineOption(CMD_OPT_HOSTNAME, CMD_OPT_HOSTNAME_SHORT, true, true, String.class, "Name of the running host", CLI_VALUE_MAP_HOSTNAME_KEY, "Missing value for required option '"+CMD_OPT_HOSTNAME+"' ("+CMD_OPT_HOSTNAME_SHORT+")"));
-		options.add(new CommandLineOption(CMD_OPT_CONFIG_FILE, CMD_OPT_CONFIG_FILE_SHORT, false, true, String.class, "Name of property file containing additional configuration options", CLI_VALUE_MAP_CONFIG_FILENAME_KEY, "Missing value for required option '"+CMD_OPT_CONFIG_FILE+"' ("+CMD_OPT_CONFIG_FILE_SHORT+")"));
+		options.add(new CommandLineOption(CMD_OPT_CONFIG_FILE, CMD_OPT_CONFIG_FILE_SHORT, true, true, String.class, "Name of property file containing configuration options", CLI_VALUE_MAP_CONFIG_FILENAME_KEY, "Missing value for required option '"+CMD_OPT_CONFIG_FILE+"' ("+CMD_OPT_CONFIG_FILE_SHORT+")"));
 		return options;
 	}
 
