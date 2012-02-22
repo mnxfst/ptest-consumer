@@ -22,6 +22,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
+import org.jboss.netty.handler.codec.http.HttpRequest;
+
 import com.mnxfst.testing.consumer.exception.HttpRequestProcessingException;
 
 /**
@@ -36,6 +38,15 @@ public interface IHttpRequestHandler extends Runnable {
 	 * @param configuration
 	 */
 	public void initialize(Properties configuration, Map<String, List<String>> queryParameters) throws HttpRequestProcessingException;
+	
+	/**
+	 * Allows to further process the request
+	 * @param request
+	 * @param queryParameters
+	 * @return holds the response
+	 * @throws HttpRequestProcessingException
+	 */
+	public byte[] processRequest(HttpRequest request, Map<String, List<String>> queryParameters) throws HttpRequestProcessingException;
 	
 	/**
 	 * Shutsdown the http request handler

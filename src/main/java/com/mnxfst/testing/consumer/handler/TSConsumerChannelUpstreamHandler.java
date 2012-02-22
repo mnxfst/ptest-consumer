@@ -76,11 +76,17 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	
 	private static final Logger logger = Logger.getLogger(TSConsumerChannelUpstreamHandler.class);
 	
+	private static final String CFG_OPT_SOAP_PREFIX = "consumer.soap.";
+	
+	/////////////////////////////////////////////////////////////////////////////////////////////
+	// dedicated context paths
+	private static final String SERVER_CONTEXT_PATH_CONSUMER_CONTROLLER = "/consumer";
+	
 	/////////////////////////////////////////////////////////////////////////////////////////////
 	// available request parameters required for starting/stopping/collecting stats from consumer 
-	private static final String REQUEST_PARAM_OP_CODE_START_CONSUMER = "startConsumer";
-	private static final String REQUEST_PARAM_OP_CODE_STOP_CONSUMER = "stopConsumer";
-	private static final String REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS = "collectConsumerStats";
+	private static final String REQUEST_PARAM_OP_CODE_START_CONSUMER = "start";
+	private static final String REQUEST_PARAM_OP_CODE_STOP_CONSUMER = "stop";
+	private static final String REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS = "collectStats";
 	private static final String REQUEST_PARAM_CONSUMER_ID = "consumerId";
 	/////////////////////////////////////////////////////////////////////////////////////////////
 	
@@ -122,7 +128,7 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	// holds all configured request handlers and provides thread-safe access to them
 	private static ConcurrentMap<String, IHttpRequestHandler> runningConsumers = new ConcurrentHashMap<String, IHttpRequestHandler>();	
 	private static ConcurrentMap<String, Class<? extends IHttpRequestHandler>> availableConsumers = new ConcurrentHashMap<String, Class<? extends IHttpRequestHandler>>();
-	
+
 	private String hostname = null;
 	private int port = 0;
 	private int socketThreadPoolSize = 0;
@@ -132,6 +138,8 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 	private Transformer documentTransformer = null;
 	
 	private static ExecutorService consumerExecutorService = Executors.newCachedThreadPool(); // TODO tweak here for performance
+	
+	private int mockCallCount = 0;
 	/////////////////////////////////////////////////////////////////////////////////////////////
 	
 	/**
@@ -169,7 +177,7 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 		for(Iterator<String> iter = consumers.keySet().iterator(); iter.hasNext();) {
 			String consumerType = iter.next();
 			availableConsumers.putIfAbsent(consumerType, consumers.get(consumerType));
-			consumerStr.append(consumers.get(consumerType).getName());
+			consumerStr.append(consumers.get(consumerType).getName()).append(" (").append(consumerType).append(")");
 			if(iter.hasNext())
 				consumerStr.append(", ");
 		}
@@ -199,92 +207,108 @@ public class TSConsumerChannelUpstreamHandler extends SimpleChannelUpstreamHandl
 			queryParams.putAll(decoder.getParameters());
 		}
 
-		Document responseDocument = documentBuilder.newDocument();
-		Element responseRootElement = responseDocument.createElement(CONSUMER_RESPONSE_ROOT_ELEMENT);
-		Map<Integer, String> errors = new HashMap<Integer, String>();
 		
-		if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_START_CONSUMER)) {
+		String uri = httpRequest.getUri();
+		
+		if(uri.startsWith(SERVER_CONTEXT_PATH_CONSUMER_CONTROLLER)) {
+			Document responseDocument = documentBuilder.newDocument();
+			Element responseRootElement = responseDocument.createElement(CONSUMER_RESPONSE_ROOT_ELEMENT);
+			Map<Integer, String> errors = new HashMap<Integer, String>();
 			
-			if(logger.isDebugEnabled())
-				logger.debug("Incoming request for starting a consumer");
 			
-			// extract the types to fire up consumer for
-			String[] consumerTypes = null;
-			try {
-				consumerTypes = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_START_CONSUMER, queryParams);
-			}  catch(HttpRequestProcessingException e) {
-				errors.put(ERROR_CODE_NO_CONSUMER_TYPES_FOUND, "No consumer types provided");
-			}
-			
-			// validate the set of consumer types and instantiate the referenced ones
-			if(consumerTypes != null && consumerTypes.length > 0) {
+			if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_START_CONSUMER)) {
+				
+				if(logger.isDebugEnabled())
+					logger.debug("Incoming request for starting a consumer");
+				
+				// extract the types to fire up consumer for
+				String[] consumerTypes = null;
 				try {
-					Element startConsumerElement = startConsumer(consumerTypes, responseDocument, queryParams);
-					responseRootElement.appendChild(startConsumerElement);
-					
-					logger.info(consumerTypes.length + " consumer(s) successfully started");
-				} catch(HttpRequestProcessingException e) {
-					errors.put(ERROR_CODE_CONSUMER_START_FAILED, e.getMessage()); 
+					consumerTypes = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_START_CONSUMER, queryParams);
+				}  catch(HttpRequestProcessingException e) {
+					errors.put(ERROR_CODE_NO_CONSUMER_TYPES_FOUND, "No consumer types provided");
 				}
-			}
-
-		} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_STOP_CONSUMER)) {
-			
-			if(logger.isDebugEnabled())
-				logger.debug("Incoming request for shutting down a consumer");
-			
-			// extract the identifier of those consumers to shutdown
-			String[] consumerIds = null;
-			try {
-				consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_STOP_CONSUMER, queryParams);
-			} catch(HttpRequestProcessingException e) {
-				errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
-			}
-			
-			// validate consumer identifier array and collect statistical information from the associated instances
-			if(consumerIds != null && consumerIds.length > 0) {
+				
+				// validate the set of consumer types and instantiate the referenced ones
+				if(consumerTypes != null && consumerTypes.length > 0) {
+					try {
+						Element startConsumerElement = startConsumer(consumerTypes, responseDocument, queryParams);
+						responseRootElement.appendChild(startConsumerElement);
+						
+						logger.info(consumerTypes.length + " consumer(s) successfully started");
+					} catch(HttpRequestProcessingException e) {
+						errors.put(ERROR_CODE_CONSUMER_START_FAILED, e.getMessage()); 
+					}
+				}
+	
+			} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_STOP_CONSUMER)) {
+				
+				if(logger.isDebugEnabled())
+					logger.debug("Incoming request for shutting down a consumer");
+				
+				// extract the identifier of those consumers to shutdown
+				String[] consumerIds = null;
 				try {
-					Element stopConsumerElement = shutdownConsumer(consumerIds, responseDocument);
-					responseRootElement.appendChild(stopConsumerElement);
+					consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_STOP_CONSUMER, queryParams);
 				} catch(HttpRequestProcessingException e) {
-					errors.put(ERROR_CODE_CONSUMER_STOP_FAILED, e.getMessage());
+					errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
 				}
-			}
-
-		} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS)) {
-
-			// extract the identifier of those consumers to collect statistical information form
-			String[] consumerIds = null;
-			try {
-				consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS, queryParams);
-			} catch(HttpRequestProcessingException e) {
-				errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
-			}
-			
-			// validate consumer identifier array and collect statistical information from the associated instances
-			if(consumerIds != null && consumerIds.length > 0) {
+				
+				// validate consumer identifier array and collect statistical information from the associated instances
+				if(consumerIds != null && consumerIds.length > 0) {
+					try {
+						Element stopConsumerElement = shutdownConsumer(consumerIds, responseDocument);
+						responseRootElement.appendChild(stopConsumerElement);
+					} catch(HttpRequestProcessingException e) {
+						errors.put(ERROR_CODE_CONSUMER_STOP_FAILED, e.getMessage());
+					}
+				}
+	
+			} else if(queryParams.containsKey(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS)) {
+	
+				// extract the identifier of those consumers to collect statistical information form
+				String[] consumerIds = null;
 				try {
-					Element statsResponseElement = collectHandlerStatistics(consumerIds, responseDocument);
-					responseRootElement.appendChild(statsResponseElement);
+					consumerIds = extractMultiParameterValues(REQUEST_PARAM_OP_CODE_COLLECT_CONSUMER_STATS, queryParams);
 				} catch(HttpRequestProcessingException e) {
-					errors.put(ERROR_CODE_COLLECTING_STATS_FAILED, e.getMessage());
+					errors.put(ERROR_CODE_NO_CONSUMER_IDENTIFIERS_FOUND, "No consumer identifiers provided");
 				}
+				
+				// validate consumer identifier array and collect statistical information from the associated instances
+				if(consumerIds != null && consumerIds.length > 0) {
+					try {
+						Element statsResponseElement = collectHandlerStatistics(consumerIds, responseDocument);
+						responseRootElement.appendChild(statsResponseElement);
+					} catch(HttpRequestProcessingException e) {
+						errors.put(ERROR_CODE_COLLECTING_STATS_FAILED, e.getMessage());
+					}
+				}
+			} else {
+				// report error
+				errors.put(ERROR_CODE_UNKNOWN_OP_CODE, "No valid op-code provided");
 			}
+	
+			// add error response
+			if(errors != null && !errors.isEmpty()) {
+				Element errorsElement = createErrorElement(errors, responseDocument);
+				responseRootElement.appendChild(errorsElement);
+			}
+				
+			
+			responseDocument.appendChild(responseRootElement);
+			
+			sendResponse(convertDocument(responseDocument), keepAlive, event);
+		} else if(uri.startsWith("/ESP-Mock-0.0.1/PlaceOrderWS")) {
+			
+			mockCallCount = mockCallCount + 1;
+			String responsestr = "<response>"+mockCallCount+"</response>";
+						
+			byte[] response = responsestr.getBytes();
+			sendResponse(response, keepAlive, event);
+			
 		} else {
-			// report error
-			errors.put(ERROR_CODE_UNKNOWN_OP_CODE, "No valid op-code provided");
+			sendResponse("<Error/>".getBytes(), keepAlive, event);
 		}
-
-		// add error response
-		if(errors != null && !errors.isEmpty()) {
-			Element errorsElement = createErrorElement(errors, responseDocument);
-			responseRootElement.appendChild(errorsElement);
-		}
-			
-		
-		responseDocument.appendChild(responseRootElement);
-		
-		sendResponse(convertDocument(responseDocument), keepAlive, event);
 	}
 	
 	/**
