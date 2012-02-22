@@ -1,0 +1,138 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.mnxfst.testing</groupId>
+  <artifactId>ptest-consumer</artifactId>
+  <version>0.0.1</version>
+  <name>ptest-consumer</name>
+  <description>Generic consumer which sets up a http server and receives its behavior via plugin mechanism</description>
+
+  <organization>
+  	<name>mnxfst</name>
+  	<url>www.kreutzfeldt.net</url>
+  </organization>
+
+  <repositories>
+	<repository>
+		<id>eaio.com</id>
+		<url>http://eaio.com/maven2</url>
+	</repository>
+
+  	<repository>
+    	<id>maven2-repository.dev.java.net</id>
+        <name>Java.net Repository for Maven</name>
+        <url>http://download.java.net/maven/2/</url>
+        <layout>default</layout>
+	</repository>
+
+  </repositories>
+
+  <developers>
+  	<developer>
+  		<id>mnxfst</id>
+  		<name>Christian Kreutzfeldt</name>
+  		<email>mnxfst@googlemail.com</email>
+  		<roles>
+  			<role>Architect</role>
+  			<role>Developer</role>
+  		</roles>
+  	</developer>
+  </developers>
+
+  <dependencies>
+  
+    <!-- testing -->
+  	<dependency>
+  		<groupId>junit</groupId>
+  		<artifactId>junit</artifactId>
+  		<version>4.8.2</version>
+  	</dependency>
+  	
+  	<!-- jboss netty -->
+  	<dependency>
+  		<groupId>io.netty</groupId>
+  		<artifactId>netty</artifactId>
+  		<version>3.3.1.Final</version>
+  	</dependency>
+  	
+  	<!-- uuid generator -->
+	<dependency>
+		<groupId>com.eaio.uuid</groupId>
+		<artifactId>uuid</artifactId>
+		<version>3.2</version>
+	</dependency>
+  	
+  	<!-- logging -->
+  	<dependency>
+  		<groupId>log4j</groupId>
+  		<artifactId>log4j</artifactId>
+  		<version>1.2.12</version>
+  	</dependency>
+  	
+  	<!-- commons -->
+  	<dependency>
+  		<groupId>commons-lang</groupId>
+  		<artifactId>commons-lang</artifactId>
+  		<version>2.6</version>
+  	</dependency>
+  	
+	<dependency>
+		<groupId>commons-io</groupId>
+		<artifactId>commons-io</artifactId>
+		<version>2.1</version>
+	</dependency>  	
+  	
+	<dependency>
+		<groupId>commons-cli</groupId>
+		<artifactId>commons-cli</artifactId>
+		<version>1.1</version>
+	</dependency>  
+	
+	<!-- xerces -->
+	<dependency>
+		<groupId>xerces</groupId>
+		<artifactId>xercesImpl</artifactId>
+		<version>2.9.1</version>	
+	</dependency>	
+	
+  	
+  </dependencies>
+   
+  <build>
+   	<plugins>
+   		 <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-dependency-plugin</artifactId>
+            <executions>
+                <execution>
+                    <id>copy-dependencies</id>
+                    <phase>prepare-package</phase>
+                    <goals>
+                        <goal>copy-dependencies</goal>
+                    </goals>
+                    <configuration>
+                        <outputDirectory>${project.build.directory}/lib</outputDirectory>
+                        <overWriteReleases>false</overWriteReleases>
+                        <overWriteSnapshots>false</overWriteSnapshots>
+                        <overWriteIfNewer>true</overWriteIfNewer>
+                    </configuration>
+                </execution>
+            </executions>
+        </plugin>
+        <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-jar-plugin</artifactId>
+            <configuration>
+                <archive>
+                    <manifest>
+                        <addClasspath>true</addClasspath>
+                        <classpathPrefix>lib/</classpathPrefix>
+                        <mainClass>theMainClass</mainClass>
+                    </manifest>
+                </archive>
+            </configuration>
+        </plugin>
+   		 
+   	</plugins>
+   </build>
+
+</project>
