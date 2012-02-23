@@ -20,7 +20,6 @@
 package com.mnxfst.testing.consumer;
 
 import java.util.Map;
-import java.util.Properties;
 
 import org.jboss.netty.channel.ChannelPipeline;
 import org.jboss.netty.channel.ChannelPipelineFactory;
@@ -30,7 +29,6 @@ import org.jboss.netty.handler.codec.http.HttpContentCompressor;
 import org.jboss.netty.handler.codec.http.HttpRequestDecoder;
 import org.jboss.netty.handler.codec.http.HttpResponseEncoder;
 
-import com.mnxfst.testing.consumer.handler.IHttpRequestHandler;
 import com.mnxfst.testing.consumer.handler.TSConsumerChannelUpstreamHandler;
 
 /**
@@ -43,8 +41,8 @@ public class TSConsumerPipelineFactory implements ChannelPipelineFactory {
 	private String hostname = null;
 	private int port = 0;
 	private int socketThreadPoolSize = 0;
-	private Properties additionalProperties = null;
-	private Map<String, Class<? extends IHttpRequestHandler>> consumers = null;
+	private Map<String, String> additionalProperties = null;
+	private Map<String, String> configuredRequestHandlers = null;
 	
 	/**
 	 * Initializes the consumer pipeline factory
@@ -53,12 +51,12 @@ public class TSConsumerPipelineFactory implements ChannelPipelineFactory {
 	 * @param socketThreadPoolSize
 	 * @param additionalProperties
 	 */
-	public TSConsumerPipelineFactory(String hostname, int port, int socketThreadPoolSize, Properties additionalProperties, Map<String, Class<? extends IHttpRequestHandler>> consumers) {
+	public TSConsumerPipelineFactory(String hostname, int port, int socketThreadPoolSize, Map<String, String> additionalProperties, Map<String, String> configuredRequestHandlers) {
 		this.hostname = hostname;
 		this.port = port;
 		this.socketThreadPoolSize = socketThreadPoolSize;
 		this.additionalProperties = additionalProperties;
-		this.consumers = consumers;
+		this.configuredRequestHandlers = configuredRequestHandlers;
 	}
 	
 	/**
@@ -71,7 +69,7 @@ public class TSConsumerPipelineFactory implements ChannelPipelineFactory {
 		channelPipeline.addLast("aggregator", new HttpChunkAggregator(1048576));
 		channelPipeline.addLast("encoder", new HttpResponseEncoder());
 		channelPipeline.addLast("deflater", new HttpContentCompressor());
-		channelPipeline.addLast("handler", new TSConsumerChannelUpstreamHandler(hostname, port, socketThreadPoolSize, additionalProperties, consumers));
+		channelPipeline.addLast("handler", new TSConsumerChannelUpstreamHandler(hostname, port, socketThreadPoolSize, additionalProperties, configuredRequestHandlers));
 		
 		return channelPipeline;
 	}

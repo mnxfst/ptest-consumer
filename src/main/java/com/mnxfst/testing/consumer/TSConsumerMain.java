@@ -67,6 +67,9 @@ public class TSConsumerMain {
 	
 	private static final String CFG_PROPERTY_CONSUMER_TYPES_PREFIX = "consumer.type.";
 	
+	private static final String CFG_OPT_REQUEST_HANDLERS = "context.request.handlers";
+	private static final String CFG_OPT_REQUEST_HANDLER_PREFIX = "context.request.handler."; 
+	
 	/**
 	 * Starts up the consumer
 	 * @param args
@@ -89,7 +92,7 @@ public class TSConsumerMain {
 			Long threadPoolSize = (Long)commandLineValues.get(CLI_VALUE_MAP_THREAD_POOL_SIZE_KEY);
 			String hostname = (String)commandLineValues.get(CLI_VALUE_MAP_HOSTNAME_KEY);
 			String additionalConfigFile = (String)commandLineValues.get(CLI_VALUE_MAP_CONFIG_FILENAME_KEY);
-			Properties additionalProps = null;
+			Map<String, String> additionalProps = null;
 			try {
 				additionalProps = loadAdditionalConfigProperties(additionalConfigFile);
 			} catch(IOException e) {
@@ -97,29 +100,11 @@ public class TSConsumerMain {
 				System.exit(-1);
 			}
 			
-			Map<String, Class<? extends IHttpRequestHandler>> availableConsumers = new HashMap<String, Class<? extends IHttpRequestHandler>>();
-			
-			for(Object k : additionalProps.keySet()) {
-				String key = (String)k;
-				if(key.startsWith(CFG_PROPERTY_CONSUMER_TYPES_PREFIX)) {
-					
-					String value = (String)additionalProps.get(key);
-					try {
-						@SuppressWarnings("unchecked")
-						Class<? extends IHttpRequestHandler> consumerClazz = (Class<? extends IHttpRequestHandler>) Class.forName(value);
-						availableConsumers.put(key.substring(CFG_PROPERTY_CONSUMER_TYPES_PREFIX.length()), consumerClazz);
-					} catch(ClassNotFoundException e) {
-						System.out.println("Unknown consumer class '"+value+"'");
-						System.exit(-1);						
-					}				
-				}				
-			}
-			
-			if(availableConsumers.isEmpty()) {
-				System.out.println("No consumer classes found");
+			Map<String, String> configuredRequestHandlers = extractRequestHandlers(additionalProps);
+			if(configuredRequestHandlers == null || configuredRequestHandlers.isEmpty()) {
+				System.out.println("No request handlers defined");
 				System.exit(-1);
-			}
-			
+			}				
 			
 			ChannelFactory channelFactory = null;
 			if(threadPoolSize != null && threadPoolSize.longValue() > 0)
@@ -128,7 +113,7 @@ public class TSConsumerMain {
 				channelFactory = new NioServerSocketChannelFactory(Executors.newCachedThreadPool(), Executors.newCachedThreadPool());
 			
 			ServerBootstrap serverBootstrap = new ServerBootstrap(channelFactory);
-			serverBootstrap.setPipelineFactory(new TSConsumerPipelineFactory(hostname, port.intValue(), (threadPoolSize != null ? threadPoolSize.intValue() : -1), additionalProps, availableConsumers));
+			serverBootstrap.setPipelineFactory(new TSConsumerPipelineFactory(hostname, port.intValue(), (threadPoolSize != null ? threadPoolSize.intValue() : -1), additionalProps, configuredRequestHandlers));
 			serverBootstrap.setOption("child.tcpNoDelay", true);
 			serverBootstrap.setOption("child.keepAlive", true);			
 			serverBootstrap.bind(new InetSocketAddress(port.intValue()));
@@ -146,12 +131,53 @@ public class TSConsumerMain {
 	 * @throws FileNotFoundException
 	 * @throws IOException
 	 */
-	protected Properties loadAdditionalConfigProperties(String filename) throws FileNotFoundException, IOException {
+	protected Map<String, String> loadAdditionalConfigProperties(String filename) throws FileNotFoundException, IOException {
+		
+		Map<String, String> results = new HashMap<String, String>();
 		Properties properties = new Properties();
 		properties.load(new FileInputStream(filename));
-		return properties;
+		
+		for(Object key : properties.keySet()) {
+			String value = properties.getProperty((String)key);
+			results.put((String)key, value);
+		}
+		
+		return results;
 	}
-
+	
+	/**
+	 * Extracts the request handler configurations
+	 * @param properties
+	 * @return
+	 */
+	protected Map<String, String> extractRequestHandlers(Map<String, String> properties) {
+			
+		if(properties != null) {
+			String configuredHandlers = properties.get(CFG_OPT_REQUEST_HANDLERS);
+			if(configuredHandlers != null && !configuredHandlers.isEmpty()) {
+				
+				String[] splittedHandlers = configuredHandlers.split(",");
+				if(splittedHandlers != null && splittedHandlers.length > 0) {
+					Map<String, String> configuredRequestHandlers = new HashMap<String, String>();
+					for(int i = 0; i  < splittedHandlers.length; i++) {
+						String handlerClass = properties.get(CFG_OPT_REQUEST_HANDLER_PREFIX + splittedHandlers[i]);
+						String handlerPath = properties.get(CFG_OPT_REQUEST_HANDLER_PREFIX + splittedHandlers[i] + ".path");
+						
+						if(handlerClass != null && !handlerClass.isEmpty() && handlerPath != null && !handlerPath.isEmpty()) {
+							configuredRequestHandlers.put(handlerPath, handlerClass);
+						} else {
+							logger.error("Handler path: " + handlerPath + ", class: " + handlerClass + " -- either one is missing!");
+						}
+					}
+					return configuredRequestHandlers;
+				}
+			}
+		}
+		
+		return null;
+		
+	}
+	
 	/**
 	 * Returns the available command-line options 
 	 * @return
